@@ -493,6 +493,9 @@ def get_driver_quali_telemetry(session, driver_code: str, quali_segment: str):
     max_speed = telemetry["Speed"].max()
     min_speed = telemetry["Speed"].min()
 
+    # An array of objects containing the start and end disances of each time the driver used DRS during the lap
+    lap_drs_zones = []
+
     # Build arrays directly from dataframes
     t_arr = telemetry["Time"].dt.total_seconds().to_numpy()
     x_arr = telemetry["X"].to_numpy()
@@ -544,6 +547,10 @@ def get_driver_quali_telemetry(session, driver_code: str, quali_segment: str):
     throttle_resampled = np.round(np.interp(timeline, t_sorted_unique, throttle_sorted), 1)
     brake_resampled = np.round(np.interp(timeline, t_sorted_unique, brake_sorted), 1)
     drs_resampled = np.interp(timeline, t_sorted_unique, drs_sorted)
+
+    # Make sure that braking is between 0 and 100 so that it matches the throttle scale
+
+    brake_resampled = brake_resampled * 100.0
 
     # Forward-fill / step sampling for discrete fields (gear)
     idxs = np.searchsorted(t_sorted_unique, timeline, side='right') - 1
@@ -643,6 +650,23 @@ def get_driver_quali_telemetry(session, driver_code: str, quali_segment: str):
             except Exception as e:
                 print(f"Failed to attach weather data to frame {i}: {e}")
 
+        # Check if drs has changed from the previous frame
+
+        if i > 0:
+            drs_prev = resampled_data["drs"][i - 1]
+            drs_curr = resampled_data["drs"][i]
+
+            if (drs_curr >= 10) and (drs_prev < 10):
+                # DRS activated
+                lap_drs_zones.append({
+                    "zone_start": float(resampled_data["dist"][i]),
+                    "zone_end": None,
+                })
+            elif (drs_curr < 10) and (drs_prev >= 10):
+                # DRS deactivated
+                if lap_drs_zones and lap_drs_zones[-1]["zone_end"] is None:
+                    lap_drs_zones[-1]["zone_end"] = float(resampled_data["dist"][i])
+
         frame_payload = {
             "t": round(t, 3),
             "telemetry": {
@@ -669,6 +693,7 @@ def get_driver_quali_telemetry(session, driver_code: str, quali_segment: str):
     return {
         "frames": frames,
         "track_statuses": formatted_track_statuses,
+        "drs_zones": lap_drs_zones,
         "max_speed": max_speed,
         "min_speed": min_speed,
     }
